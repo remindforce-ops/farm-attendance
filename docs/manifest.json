@@ -1,0 +1,9 @@
+{
+  "name": "농장 근태·급여",
+  "short_name": "농장 근태",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2f6b3c",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

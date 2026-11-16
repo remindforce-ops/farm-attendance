@@ -1,0 +1,9 @@
+{
+  "name": "farm-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev/server.mjs",
+    "test": "node dev/test.mjs"
+  }
+}

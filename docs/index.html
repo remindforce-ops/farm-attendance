@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#2f6b3c">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>농장 근태·급여</title>
+<style>
+:root{--g:#2f6b3c;--bg:#f4f5f1;--line:#dfe2d8;--mut:#6b7265;--red:#b3402e;--amb:#a86a00}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;background:var(--bg);color:#1d211b;font-size:15px;line-height:1.5}
+#app{max-width:520px;margin:0 auto;min-height:100vh;background:#fff;padding-bottom:76px}
+header{background:var(--g);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+header b{font-size:16px}
+header button{background:none;color:#fff;border-color:rgba(255,255,255,.6);padding:5px 10px;font-size:13px}
+main{padding:16px}
+nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:520px;display:flex;background:#fff;border-top:1px solid var(--line)}
+nav button{flex:1;padding:14px 0;border:0;border-radius:0;background:none;font-size:13px;color:var(--mut)}
+nav button.on{color:var(--g);font-weight:700;box-shadow:inset 0 3px var(--g)}
+h2{font-size:17px;margin:4px 0 12px}
+h3{font-size:15px;margin:18px 0 8px}
+button{font:inherit;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer}
+button.pri{background:var(--g);color:#fff;border-color:var(--g);font-weight:700}
+button.big{width:100%;padding:14px;font-size:16px;margin-top:6px}
+button.no{color:var(--red)}
+input,select{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;width:100%;background:#fff}
+input[type=checkbox]{width:auto}
+input:disabled{background:var(--bg);color:var(--mut)}
+label{display:block;font-size:13px;color:var(--mut);margin-bottom:8px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:4px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 8px;margin-top:8px}
+.mut{color:var(--mut);font-size:13px}
+.chip{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--bg);color:var(--mut);white-space:nowrap}
+.chip.ok{background:#e1efe3;color:var(--g)}
+.chip.wait{background:#f8ecd2;color:var(--amb)}
+.chip.bad{background:#f6dfda;color:var(--red)}
+.badge{background:var(--red);color:#fff;border-radius:99px;font-size:11px;padding:0 6px;margin-left:3px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:7px 6px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:400}
+tr.sel{background:#eef4ee}
+tr.tot td{font-weight:700}
+.slip{border:1px solid #1d211b;border-radius:6px;padding:12px;margin-top:10px}
+.slip h3{margin:0 0 6px;text-align:center}
+.slip td:last-child,.slip th:last-child{color:var(--mut);font-size:12px}
+.net{font-size:17px;font-weight:700;text-align:right;margin:10px 0 0}
+.now{font-size:20px;font-weight:700;margin:8px 0}
+.note{font-size:12px;color:var(--mut);background:var(--bg);padding:8px 10px;border-radius:8px;margin-top:14px}
+.okmsg{background:#e1efe3;border-color:var(--g);color:var(--g);font-weight:700}
+.errmsg{background:#f6dfda;border-color:var(--red);color:var(--red);font-weight:700}
+.qrpair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;break-inside:avoid}
+.qr{border:3px solid var(--g);border-radius:10px;padding:10px;text-align:center}
+.qr.out{border-color:var(--red)}
+.qr b{display:block;font-size:17px;color:var(--g);margin-bottom:6px}
+.qr.out b{color:var(--red)}
+.qr svg{width:100%;height:auto;display:block}
+@media print{header,nav,.noprint{display:none!important}#app{max-width:none;padding:0}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const CFG=window.CONFIG||{};
+const $=id=>document.getElementById(id);
+const val=id=>$(id)?.value??'';
+const pad=n=>String(n).padStart(2,'0');
+const won=n=>Math.round(n).toLocaleString('ko-KR')+'원';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const WORK={ot:'연장근무',night:'야간근무',hol:'휴일근무'};
+const KIND={...WORK,fix:'출퇴근 정정',leave:'휴가'};
+const CHIP={'대기':'wait','승인':'ok','반려':'bad'};
+const TOKEN_KEY='farm-token';
+
+let token=null;
+try{token=localStorage.getItem(TOKEN_KEY)}catch(e){}
+function setToken(t){token=t;try{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)}catch(e){}}
+
+const now=new Date();
+let home=null,D=null,tab='',ym=`${now.getFullYear()}-${pad(now.getMonth()+1)}`,rk='ot',attEmp=0,preview=0,editEmp=null,
+    slipYm='',msg=null,scan=null,showQR=0,acct=0,setup=false;
+
+/* ---------- 서버 호출 ---------- */
+// 서버는 구글 Apps Script 웹 앱. 사전 요청(preflight)을 피하려고 text/plain으로 보낸다.
+async function api(fn,args={}){
+  let j;
+  try{
+    const res=await fetch(CFG.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn,p:{token,...args}})});
+    j=await res.json();
+  }catch(e){throw new Error('서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.')}
+  if(!j.ok){
+    if(j.error==='AUTH'){setToken(null);throw new Error('다시 로그인해 주세요.')}
+    throw new Error(j.error||'오류가 발생했습니다.');
+  }
+  return j.data;
+}
+// 변경 작업: 실패하면 안내만 띄우고 화면(입력값)은 그대로 둔다.
+async function go(fn,args,then){
+  try{await api(fn,args)}catch(e){alert(e.message);if(!token)show();return}
+  then?.();show();
+}
+const locate=()=>new Promise(r=>navigator.geolocation
+  ?navigator.geolocation.getCurrentPosition(p=>r({lat:p.coords.latitude,lng:p.coords.longitude}),()=>r({}),{enableHighAccuracy:true,timeout:10000})
+  :r({}));
+
+const TABS={admin:[['dash','현황'],['inbox','승인함'],['att','근태'],['pay','급여'],['set','설정']],
+            emp:[['clock','출퇴근'],['req','요청'],['my','내 근태'],['slip','명세서']]};
+const LOAD={
+  clock:async()=>null,
+  req:()=>api('my_requests'),
+  my:()=>api('month',{ym}),
+  slip:async()=>{
+    const list=await api('my_slips');
+    if(!list.some(s=>s.ym==slipYm))slipYm=list[0]?.ym||'';
+    return {list,c:slipYm?await api('my_slip',{ym:slipYm}):null};
+  },
+  dash:()=>api('dash'),
+  inbox:()=>api('requests'),
+  att:async()=>({rows:await api('att',{ym}),det:attEmp?await api('month',{ym,user:attEmp}):null}),
+  pay:()=>api('pay',{ym}),
+  set:()=>api('config'),
+};
+
+async function show(){
+  if(!CFG.url)return frame('<div class="card errmsg">서버 주소 설정(config.js)이 없습니다.</div>');
+  try{
+    if(!token){setup=(await api('status')).setup;return drawLogin()}
+    if(scan){home=await api('me');await doScan()}
+    // 서버 응답이 느린 편이라 화면 정보와 탭 내용을 동시에 요청한다(처음에는 권한을 알아야 하므로 순서대로).
+    const known=home&&TABS[home.user.role].some(t=>t[0]==tab);
+    if(known)[home,D]=await Promise.all([api('me'),LOAD[tab]()]);
+    else{
+      home=await api('me');
+      const tabs=TABS[home.user.role];
+      if(!tabs.some(t=>t[0]==tab))tab=tabs[0][0];
+      D=await LOAD[tab]();
+    }
+    if(tab=='slip')home.unviewed=D.list.filter(s=>!s.viewed&&s.ym!=slipYm).length;
+  }catch(e){
+    if(!token&&e.message=='다시 로그인해 주세요.')return show();
+    return frame(`<div class="card errmsg">${esc(e.message)}</div><button onclick="show()">다시 시도</button>`);
+  }
+  draw();
+}
+function frame(inner,right=''){$('app').innerHTML=`<header><b>농장 근태·급여</b>${right}</header><main>${inner}</main>`}
+
+/* ---------- 로그인 ---------- */
+function drawLogin(){
+  frame(`<h2>${setup?'처음 설정: 관리자 계정 만들기':'로그인'}</h2>
+    ${scan?'<div class="card okmsg">QR을 찍었습니다. 로그인하면 바로 기록됩니다.</div>':''}
+    ${setup?`<p class="mut">이 앱을 처음 여셨습니다. 대표님(관리자) 계정을 만들어 주세요. 직원 계정은 로그인 후 설정에서 등록합니다.</p>
+      <label>이름<input id="ln" autocomplete="name"></label>`:''}
+    <label>휴대폰 번호<input id="lp" type="tel" inputmode="numeric" autocomplete="username" placeholder="01012345678"></label>
+    <label>비밀번호${setup?' (8자 이상)':''}<input id="lw" type="password" autocomplete="${setup?'new-password':'current-password'}" onkeydown="if(event.key=='Enter')login()"></label>
+    <button class="pri big" onclick="login()">${setup?'관리자 계정 만들기':'로그인'}</button>`);
+}
+async function login(){
+  try{const r=await api(setup?'setup':'login',{name:val('ln'),phone:val('lp'),pin:val('lw')});setToken(r.token);tab='';home=null;show()}
+  catch(e){alert(e.message)}
+}
+async function logout(){try{await api('logout')}catch(e){}setToken(null);acct=0;home=null;show()}
+function vAcct(){
+  return `<h2>내 계정</h2><div class="card"><b>${esc(home.user.name)}</b> <span class="mut">${home.user.role=='admin'?'관리자':'직원'}</span></div>
+    <h3>비밀번호 변경</h3>
+    <label>현재 비밀번호<input id="po" type="password" autocomplete="current-password"></label>
+    <label>새 비밀번호 (${home.user.role=='admin'?8:6}자 이상)<input id="pn" type="password" autocomplete="new-password"></label>
+    <div class="row"><button class="pri" onclick="go('change_pin',{old:val('po'),new:val('pn')},()=>{acct=0;alert('비밀번호가 변경되었습니다.')})">변경</button>
+    <button class="no" onclick="logout()">로그아웃</button></div>`;
+}
+
+/* ---------- 직원 화면 ---------- */
+function readHash(){
+  const m=location.hash.match(/^#qr=(in|out)-(\d+)$/);
+  if(!m)return;
+  scan=[m[1],m[2]];
+  try{history.replaceState(null,'',location.href.split('#')[0])}catch(e){}
+}
+// QR 주소로 들어온 경우: 위치를 확인해 서버에 기록을 요청한다.
+async function doScan(){
+  const [act,farm]=scan;scan=null;tab='clock';
+  frame('<p class="now">위치 확인 중입니다...</p>');
+  const pos=await locate();
+  try{msg={ok:1,t:(await api('scan',{act,farm,...pos})).msg}}
+  catch(e){if(!token)throw e;msg={t:e.message}}
+}
+function vClock(){
+  const ps=home.punches,open=ps.find(p=>!p.out);
+  return `<h2>${home.today} 출퇴근</h2>
+    <p class="now">${open?`${esc(open.farm)} 근무 중 · ${open.in} 출근`:ps.length?'퇴근했습니다':'출근 전입니다'}</p>
+    <p>농장에 붙어 있는 <b>${open?'퇴근':'출근'} QR 코드</b>를 휴대폰 카메라로 찍으면 기록됩니다. 농장 안에서 찍어야 하며 위치 권한이 필요합니다.</p>
+    <h3>오늘 기록</h3>`+(ps.map(p=>`<div class="card row"><span>${esc(p.farm)}</span><span>${p.in} ~ ${p.out||'근무 중'}</span></div>`).join('')||'<p class="mut">기록이 없습니다.</p>')+
+    `<p class="note">찍는 것을 잊었거나 시각이 틀리면 요청 탭에서 "출퇴근 정정"을 올려 주세요.</p>`;
+}
+function reqLine(r,withName){
+  const what=WORK[r.kind]?`${r.hours}시간`:r.kind=='fix'?`${esc(r.farm)} ${r.in}~${r.out}`:'1일';
+  return `<div class="row"><b>${withName?esc(r.name)+' · ':''}${KIND[r.kind]}</b><span class="chip ${CHIP[r.status]}">${r.status}</span></div>
+    <div class="mut">${r.date} · ${what} · ${esc(r.reason)}${r.reject?`<br>반려 사유: ${esc(r.reject)}`:''}</div>`;
+}
+const farmOpts=()=>home.farms.map(f=>`<option value="${f.id}">${esc(f.name)}</option>`).join('');
+function vReq(){
+  return `<h2>근무 승인요청</h2><div class="card">
+    <label>요청 종류<select onchange="rk=this.value;draw()">${Object.keys(KIND).map(k=>`<option value="${k}" ${k==rk?'selected':''}>${KIND[k]}</option>`).join('')}</select></label>
+    <label>날짜<input type="date" id="rd" value="${home.today}"></label>
+    ${WORK[rk]?`<label>시간(시간 단위)<input type="number" id="rh" min="0.5" step="0.5" value="2"></label>`:''}
+    ${rk=='fix'?`<label>농장<select id="rf">${farmOpts()}</select></label>
+      <div class="grid"><label>출근 시각<input type="time" id="ri" value="08:00"></label><label>퇴근 시각<input type="time" id="ro" value="17:00"></label></div>`:''}
+    <label>사유<input id="rr" placeholder="예: 출하 물량 포장"></label>
+    <button class="pri" onclick="go('request_create',{kind:rk,date:val('rd'),hours:val('rh'),farm:val('rf'),in:val('ri'),out:val('ro'),reason:val('rr')})">승인 요청</button></div>
+    <h3>내 요청 내역</h3>`+(D.map(r=>`<div class="card">${reqLine(r)}</div>`).join('')||'<p class="mut">요청 내역이 없습니다.</p>');
+}
+const monthInput=()=>`<label>대상 월<input type="month" value="${ym}" onchange="if(this.value){ym=this.value;show()}"></label>`;
+const statLine=st=>`근무 ${st.days}일 · 정규 ${st.reg}시간 · 연장 ${st.ot} · 야간 ${st.night} · 휴일 ${st.hol}시간 · 휴가 ${st.leave}일`;
+function dayList(days){
+  return `<div class="scroll"><table><tr><th>날짜</th><th>농장</th><th>출근</th><th>퇴근</th></tr>`+
+    days.map(p=>`<tr><td>${p.date.slice(5)}</td><td>${esc(p.farm)}</td><td>${p.in}</td><td>${p.out||'누락'}</td></tr>`).join('')+`</table></div>`;
+}
+function vMy(){return `<h2>내 근태</h2>${monthInput()}<div class="card">${statLine(D.st)}</div>${dayList(D.days)}`}
+function vSlip(){
+  if(!D.list.length)return '<h2>급여명세서</h2><p class="mut">아직 발송된 명세서가 없습니다.</p>';
+  return `<h2>급여명세서</h2><div class="row" style="justify-content:flex-start">${D.list.map(s=>`<button class="${s.ym==slipYm?'pri':''}" onclick="slipYm='${s.ym}';show()">${s.ym}</button>`).join('')}</div>${slip(D.c,slipYm)}`;
+}
+function slip(c,m){
+  const [y,mo]=m.split('-').map(Number);
+  const tr=(a,n)=>`<tr><td>${esc(a[0])}</td><td>${won(a[1])}</td><td>${esc(n??'')}</td></tr>`;
+  return `<div class="slip"><h3>${y}년 ${mo}월 급여명세서</h3>
+    <p class="mut">성명 ${esc(c.name)} · 지급일 ${c.pay_date}<br>${statLine(c.st)}</p>
+    <div class="scroll"><table><tr><th>지급 항목</th><th>금액</th><th>계산 근거</th></tr>${c.items.map(a=>tr(a,a[2])).join('')}
+    <tr class="tot"><td>지급 합계</td><td>${won(c.gross)}</td><td></td></tr>
+    <tr><th>공제 항목</th><th>금액</th><th></th></tr>${c.ded.map(a=>tr(a)).join('')}
+    <tr class="tot"><td>공제 합계</td><td>${won(c.dsum)}</td><td></td></tr></table></div>
+    <p class="net">실지급액 ${won(c.net)}</p></div>`;
+}
+
+/* ---------- 대표 화면 ---------- */
+function vDash(){
+  const names=a=>a.map(esc).join(', ')||'-';
+  return `<h2>${home.today} 현황</h2>
+    <div class="card row"><span>미처리 승인요청</span><button class="pri" onclick="tab='inbox';show()">${home.pending}건 보기</button></div>`+
+    (D.farms.map(f=>`<div class="card"><b>${esc(f.name)}</b><div class="mut">근무 중: ${names(f.working)}<br>퇴근: ${names(f.left)}</div></div>`).join('')
+      ||'<p class="mut">설정에서 농장을 먼저 등록해 주세요.</p>')+
+    `<div class="card"><b>미출근</b><div class="mut">${names(D.absent)}</div></div>`;
+}
+function vInbox(){
+  const p=D.pending;
+  return `<div class="row"><h2>승인함</h2>${p.length?`<button onclick="if(confirm('대기 중인 ${p.length}건을 모두 승인할까요?'))go('approve_all')">전체 승인</button>`:''}</div>`+
+    (p.map(r=>`<div class="card">${reqLine(r,1)}<div class="row" style="justify-content:flex-end;margin-top:8px">
+      <button class="no" onclick="decide(${r.id},false)">반려</button><button class="pri" onclick="decide(${r.id},true)">승인</button></div></div>`).join('')||'<p class="mut">대기 중인 요청이 없습니다.</p>')+
+    `<h3>최근 처리 내역</h3>`+D.done.map(r=>`<div class="card">${reqLine(r,1)}</div>`).join('');
+}
+function decide(id,ok){
+  let reject;
+  if(!ok){reject=prompt('반려 사유를 입력해 주세요.');if(reject===null)return}
+  go('decide',{id,ok,reject});
+}
+function vAtt(){
+  const sel=D.rows.find(r=>r.id==attEmp);
+  return `<h2>근태 관리</h2>${monthInput()}<div class="scroll"><table>
+    <tr><th>직원</th><th>근무일</th><th>정규</th><th>연장</th><th>야간</th><th>휴일</th><th>휴가</th></tr>`+
+    D.rows.map(({id,name,st:s})=>
+      `<tr class="${attEmp==id?'sel':''}" onclick="attEmp=attEmp==${id}?0:${id};show()"><td>${esc(name)}</td><td>${s.days}</td><td>${s.reg}</td><td>${s.ot}</td><td>${s.night}</td><td>${s.hol}</td><td>${s.leave}</td></tr>`).join('')+
+    `</table></div><p class="mut">직원을 누르면 일별 기록이 보입니다. 시간 단위는 시간, 근무일·휴가는 일입니다.</p>`+
+    (sel&&D.det?`<h3>${esc(sel.name)} 일별 기록</h3>${dayList(D.det.days)}`:'');
+}
+function vPay(){
+  const total=D.reduce((s,r)=>s+r.c.net,0),left=D.filter(r=>!r.sent).length;
+  const rows=D.map(r=>{
+    const c=r.c,lock=r.sent?'disabled':'';
+    const inp=(k,l)=>`<label>${l}<input type="number" min="0" ${lock} value="${r[k]||''}" placeholder="0" onchange="go('pay_set',{ym,user:${r.id},key:'${k}',value:this.value||'0'})"></label>`;
+    return `<div class="card"><div class="row"><b>${esc(r.name)} <span class="mut">${r.type}</span></b>
+      <span class="chip ${r.sent?(r.viewed?'ok':'wait'):''}">${r.sent?(r.viewed?'열람 '+r.viewed:'발송됨'):'미발송'}</span></div>
+      <div class="row"><span>지급 ${won(c.gross)}</span><span>공제 ${won(c.dsum)}</span><b>실지급 ${won(c.net)}</b></div>
+      <div class="grid">${inp('inc','인센티브')}${inp('ins','4대보험')}${inp('tax','소득세')}${inp('mgmt','관리비')}</div>
+      <div class="row"><button onclick="preview=preview==${r.id}?0:${r.id};draw()">명세서 ${preview==r.id?'닫기':'보기'}</button>
+      ${r.sent?`<button class="no" onclick="go('pay_unsend',{ym,user:${r.id}})">발송 취소</button>`:`<button class="pri" onclick="go('pay_send',{ym,user:${r.id}})">발송</button>`}</div>
+      ${preview==r.id?slip(c,ym):''}</div>`}).join('');
+  return `<h2>급여 마감</h2>${monthInput()}
+    <div class="card row"><b>실지급 합계 ${won(total)}</b><span><button onclick="csv()">급여대장 내려받기</button>
+    ${left?`<button class="pri" onclick="if(confirm('${ym} 명세서를 ${left}명에게 발송할까요?'))go('pay_send',{ym})">전체 발송</button>`:''}</span></div>${rows||'<p class="mut">설정에서 직원을 먼저 등록해 주세요.</p>'}
+    <p class="note">발송하면 그 시점의 금액이 명세서로 고정됩니다. 수정하려면 발송 취소 후 다시 발송합니다.</p>`;
+}
+function csv(){
+  const head=['성명','급여형태','근무일','정규시간','연장','야간','휴일','지급합계','4대보험','소득세','관리비','공제합계','실지급'];
+  const q=s=>`"${String(s).replace(/"/g,'""')}"`;
+  const lines=D.map(r=>{const c=r.c,d=Object.fromEntries(c.ded);
+    return [q(r.name),r.type,c.st.days,c.st.reg,c.st.ot,c.st.night,c.st.hol,c.gross,d['4대보험']||0,d['소득세']||0,d['관리비']||0,c.dsum,c.net].join(',')});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob(['﻿'+[head.join(','),...lines].join('\r\n')],{type:'text/csv'}));
+  a.download=`급여대장_${ym}.csv`;a.click();
+}
+function qrSvg(text){const q=qrcode(0,'M');q.addData(text);q.make();return q.createSvgTag({cellSize:4,margin:2})}
+function vQR(){
+  const base=location.origin+location.pathname;
+  return `<div class="row noprint"><button onclick="showQR=0;draw()">← 설정으로</button><button class="pri" onclick="print()">인쇄</button></div>
+    <p class="mut noprint">농장마다 출근용과 퇴근용을 따로 붙여 두세요. 직원이 휴대폰 카메라로 찍으면 기록됩니다.</p>`+
+    D.farms.map(f=>`<div class="qrpair">${[['in','출근'],['out','퇴근']].map(([a,l])=>`<div class="qr ${a}"><b>${esc(f.name)} ${l}</b>${
+      typeof qrcode=='function'?qrSvg(`${base}#qr=${a}-${f.id}`):'<p class="mut">QR 생성에는 인터넷 연결이 필요합니다.</p>'}</div>`).join('')}</div>`).join('');
+}
+function saveFarm(id,patch){
+  const f=D.farms.find(x=>x.id==id);
+  go('farm_save',{id,name:f.name,lat:f.lat,lng:f.lng,rad:f.rad,...patch});
+}
+async function setFarmLoc(id){
+  const pos=await locate();
+  if(pos.lat==null)return alert('위치를 확인할 수 없습니다. 위치 권한을 허용해 주세요.');
+  saveFarm(id,pos);
+}
+function setFarmCoord(id){
+  const v=val('co'+id).trim().split(/[,\s]+/),lat=+v[0],lng=+v[1];
+  if(v.length!=2||v.includes('')||isNaN(lat)||isNaN(lng))return alert('좌표를 "위도, 경도" 순서로 입력해 주세요. 예: 36.12345, 127.56789');
+  saveFarm(id,{lat,lng});
+}
+function vSet(){
+  if(showQR)return vQR();
+  const num=(id,l,v)=>`<label>${l}<input type="number" min="0" id="${id}" value="${v||''}" placeholder="0"></label>`;
+  const form=e=>`<div class="card">
+    <label>이름<input id="en" value="${esc(e.name)}"></label>
+    <label>휴대폰 번호 (로그인 아이디)<input id="ep" type="tel" inputmode="numeric" value="${esc(e.phone)}" placeholder="01012345678"></label>
+    <label>비밀번호 (6자 이상${e.id?', 바꿀 때만 입력':''})<input id="ew" type="text" autocomplete="off"></label>
+    <div class="grid"><label>급여 형태<select id="et">${['월급','일급','시급'].map(t=>`<option ${t==e.type?'selected':''}>${t}</option>`).join('')}</select></label>
+    ${num('eb','기본 금액(월급/일급/시급)',e.base)}
+    ${num('r_ot','연장 시간당',e.rate_ot)}${num('r_night','야간 시간당',e.rate_night)}
+    ${num('r_hol','휴일 시간당',e.rate_hol)}${num('em','관리비 공제(월)',e.mgmt)}</div>
+    <div class="mut">고정 수당 (최대 3개)</div>
+    ${[0,1,2].map(i=>`<div class="grid"><input id="an${i}" placeholder="수당 이름" value="${esc(e.allow[i]?.n)}"><input type="number" min="0" id="aa${i}" placeholder="금액" value="${e.allow[i]?.a||''}"></div>`).join('<div style="height:6px"></div>')}
+    ${e.id?`<label style="margin-top:10px"><input type="checkbox" id="ea" ${e.active?'checked':''}> 재직 중 (해제하면 로그인할 수 없고 목록에서 빠집니다)</label>`:''}
+    <div class="row" style="margin-top:10px"><button onclick="editEmp=null;draw()">취소</button><button class="pri" onclick="saveEmp()">저장</button></div></div>`;
+  return `<h2>설정</h2><h3>농장</h3>`+
+    D.farms.map(f=>`<div class="card"><input value="${esc(f.name)}" aria-label="농장 이름" onchange="saveFarm(${f.id},{name:this.value})">
+      <div class="row">${f.lat==null?`<span class="chip wait">위치 미등록 · QR만으로 기록</span>`
+        :`<span class="chip ok">위치 등록됨 ${f.lat.toFixed(5)}, ${f.lng.toFixed(5)}</span>
+          <label style="margin:0">허용 반경(m) <input type="number" min="30" style="width:90px" value="${f.rad}" onchange="saveFarm(${f.id},{rad:Math.max(30,+this.value||200)})"></label>`}</div>
+      <div class="row"><button onclick="setFarmLoc(${f.id})">현재 위치로 ${f.lat==null?'등록':'다시 등록'}</button>
+        ${f.lat==null?'':`<button class="no" onclick="saveFarm(${f.id},{lat:null,lng:null})">위치 해제</button>`}</div>
+      <div class="row"><input style="flex:1;width:auto" id="co${f.id}" aria-label="위도, 경도" placeholder="위도, 경도 (예: 36.12345, 127.56789)"><button onclick="setFarmCoord(${f.id})">좌표로 등록</button></div></div>`).join('')+
+    `<p class="mut">농장 한가운데에서 "현재 위치로 등록"을 누르거나, 지도에서 복사한 좌표를 "위도, 경도" 순서로 붙여 넣고 "좌표로 등록"을 누르세요. 등록된 농장은 허용 반경 안에서 QR을 찍어야 기록됩니다.</p>
+    <div class="row"><button onclick="go('farm_save',{name:'새 농장'})">농장 추가</button>
+    ${D.farms.length?`<button class="pri" onclick="showQR=1;draw()">출퇴근 QR 코드 보기·인쇄</button>`:''}</div>
+    <h3>급여 지급일</h3><label>익월 며칠<input type="number" min="1" max="28" value="${D.pay_day}" onchange="go('payday_set',{day:Math.min(28,Math.max(1,+this.value||10))})"></label>
+    <h3>직원</h3>`+
+    D.emps.map(x=>`<div class="card row" onclick="editEmp=editEmp==${x.id}?null:${x.id};draw()"><b>${esc(x.name)} ${x.active?'':'<span class="chip bad">퇴사</span>'}</b><span class="mut">${x.type} ${won(x.base)}</span></div>`+
+      (editEmp==x.id?form(x):'')).join('')+
+    (editEmp=='new'?form({name:'',phone:'',type:'월급',allow:[]}):`<button onclick="editEmp='new';draw()">직원 추가</button>`);
+}
+function saveEmp(){
+  go('emp_save',{id:editEmp=='new'?null:editEmp,name:val('en'),phone:val('ep'),pin:val('ew'),type:val('et'),
+    base:+val('eb')||0,mgmt:+val('em')||0,rate_ot:+val('r_ot')||0,rate_night:+val('r_night')||0,rate_hol:+val('r_hol')||0,
+    allow:[0,1,2].map(i=>({n:val('an'+i).trim(),a:+val('aa'+i)||0})).filter(a=>a.n&&a.a),
+    active:$('ea')?$('ea').checked:true},()=>{editEmp=null});
+}
+
+/* ---------- 공통 ---------- */
+function draw(){
+  const tabs=TABS[home.user.role];
+  const badge={inbox:home.pending,slip:home.unviewed};
+  const view=acct?vAcct():{dash:vDash,inbox:vInbox,att:vAtt,pay:vPay,set:vSet,clock:vClock,req:vReq,my:vMy,slip:vSlip}[tab]();
+  const m=msg;msg=null;
+  $('app').innerHTML=`<header><b>농장 근태·급여</b><button onclick="acct=!acct;draw()">${acct?'닫기':esc(home.user.name)}</button></header>
+    <main>${m?`<div class="card ${m.ok?'okmsg':'errmsg'}">${esc(m.t)}</div>`:''}${view}</main>
+    <nav>${tabs.map(t=>`<button class="${!acct&&t[0]==tab?'on':''}" onclick="acct=0;tab='${t[0]}';show()">${t[1]}${badge[t[0]]?`<span class="badge">${badge[t[0]]}</span>`:''}</button>`).join('')}</nav>`;
+}
+readHash();
+addEventListener('hashchange',()=>{readHash();show()});
+show();
+</script>
+</body>
+</html>
