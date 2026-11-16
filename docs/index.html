@@ -60,6 +60,8 @@ tr.tot td{font-weight:700}
 .qr.out b{color:var(--red)}
 .qr svg{width:100%;height:auto;display:block}
 @media print{header,nav,.noprint{display:none!important}#app{max-width:none;padding:0}}
+body.busy::before{content:'';position:fixed;z-index:9;top:0;left:0;height:3px;width:40%;background:#f5b301;animation:busy 1s linear infinite}
+@keyframes busy{from{left:-40%}to{left:100%}}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="config.js"></script>
@@ -78,9 +80,10 @@ const KIND={...WORK,fix:'출퇴근 정정',leave:'휴가'};
 const CHIP={'대기':'wait','승인':'ok','반려':'bad'};
 const TOKEN_KEY='farm-token';
 
+const ROLE_KEY='farm-role'; // 지난번 권한(관리자/직원)을 기억해 첫 화면을 한 번에 읽는다
 let token=null;
 try{token=localStorage.getItem(TOKEN_KEY)}catch(e){}
-function setToken(t){token=t;try{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)}catch(e){}}
+function setToken(t){token=t;try{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(ROLE_KEY)}catch(e){}}
 
 const now=new Date();
 let home=null,D=null,tab='',ym=`${now.getFullYear()}-${pad(now.getMonth()+1)}`,rk='ot',attEmp=0,preview=0,editEmp=null,
@@ -88,12 +91,15 @@ let home=null,D=null,tab='',ym=`${now.getFullYear()}-${pad(now.getMonth()+1)}`,r
 
 /* ---------- 서버 호출 ---------- */
 // 서버는 구글 Apps Script 웹 앱. 사전 요청(preflight)을 피하려고 text/plain으로 보낸다.
-async function api(fn,args={}){
+// 여러 요청을 한 번에 보내고(서버 왕복 1회) 결과를 배열로 받는다. calls: [[함수, 인자], ...]
+let busy=0;
+async function apiAll(calls){
   let j;
+  document.body.classList.toggle('busy',++busy>0);
   try{
     // 구글 서버의 응답이 가끔 돌아오지 않고 멈춘다. 12초 안에 답이 없으면 같은 요청 번호(rid)로 두 번까지 다시 보낸다.
     // 서버는 같은 rid를 한 번만 처리하므로 다시 보내도 기록이 두 번 생기지 않는다.
-    const body=JSON.stringify({fn,rid:crypto.randomUUID(),p:{token,...args}});
+    const body=JSON.stringify({rid:crypto.randomUUID(),calls:calls.map(([fn,args])=>({fn,p:{token,...args}}))});
     const send=()=>new Promise((ok,no)=>{
       const x=new XMLHttpRequest();
       x.open('POST',CFG.url);
@@ -107,59 +113,95 @@ async function api(fn,args={}){
       try{j=await send();break}catch(e){if(i==2)throw e}
     }
   }catch(e){throw new Error('서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.')}
+  finally{document.body.classList.toggle('busy',--busy>0)}
   if(!j.ok){
     if(j.error==='AUTH'){setToken(null);throw new Error('다시 로그인해 주세요.')}
     throw new Error(j.error||'오류가 발생했습니다.');
   }
   return j.data;
 }
-// 변경 작업: 실패하면 안내만 띄우고 화면(입력값)은 그대로 둔다.
-async function go(fn,args,then){
-  try{await api(fn,args)}catch(e){alert(e.message);if(!token)show();return}
-  then?.();show();
-}
+const api=async(fn,args={})=>(await apiAll([[fn,args]]))[0];
+// 변경 작업: 변경과 화면 새로 읽기를 한 번에 보낸다. 실패하면 안내만 띄우고 화면(입력값)은 그대로 둔다.
+const go=(fn,args,then)=>show([[fn,args]],then);
 const locate=()=>new Promise(r=>navigator.geolocation
   ?navigator.geolocation.getCurrentPosition(p=>r({lat:p.coords.latitude,lng:p.coords.longitude}),()=>r({}),{enableHighAccuracy:true,timeout:10000})
   :r({}));
 
 const TABS={admin:[['dash','현황'],['inbox','승인함'],['att','근태'],['pay','급여'],['set','설정']],
             emp:[['clock','출퇴근'],['req','요청'],['my','내 근태'],['slip','명세서']]};
+// 탭마다 서버에서 읽어 올 요청 목록
 const LOAD={
-  clock:async()=>null,
-  req:()=>api('my_requests'),
-  my:()=>api('month',{ym}),
-  slip:async()=>{
-    const list=await api('my_slips');
-    if(!list.some(s=>s.ym==slipYm))slipYm=list[0]?.ym||'';
-    return {list,c:slipYm?await api('my_slip',{ym:slipYm}):null};
-  },
-  dash:()=>api('dash'),
-  inbox:()=>api('requests'),
-  att:async()=>({rows:await api('att',{ym}),det:attEmp?await api('month',{ym,user:attEmp}):null}),
-  pay:()=>api('pay',{ym}),
-  set:()=>api('config'),
+  clock:()=>[],
+  req:()=>[['my_requests']],
+  my:()=>[['month',{ym}]],
+  slip:()=>[['my_slips'],...(slipYm?[['my_slip',{ym:slipYm}]]:[])],
+  dash:()=>[['dash']],
+  inbox:()=>[['requests']],
+  att:()=>[['att',{ym}],...(attEmp?[['month',{ym,user:attEmp}]]:[])],
+  pay:()=>[['pay',{ym}]],
+  set:()=>[['config']],
 };
+const MAKE={slip:r=>({list:r[0],c:r[1]||null}),att:r=>({rows:r[0],det:r[1]||null})};
+const make=(t,r)=>(MAKE[t]||(r=>r[0]??null))(r);
 
-async function show(){
+// 한 번 본 화면은 기억해 두었다가 바로 보여 주고, 서버에서 새 내용이 오면 바꿔 그린다.
+let seen={},seq=0;
+// pre: 화면을 읽기 전에 먼저 실행할 변경 요청, then: 변경이 성공한 뒤 실행할 일
+async function show(pre=[],then){
   if(!CFG.url)return frame('<div class="card errmsg">서버 주소 설정(config.js)이 없습니다.</div>');
+  const my=++seq;
   try{
     if(!token){setup=(await api('status')).setup;return drawLogin()}
-    if(scan){home=await api('me');await doScan()}
-    // 서버 응답이 느린 편이라 화면 정보와 탭 내용을 동시에 요청한다(처음에는 권한을 알아야 하므로 순서대로).
-    const known=home&&TABS[home.user.role].some(t=>t[0]==tab);
-    if(known)[home,D]=await Promise.all([api('me'),LOAD[tab]()]);
-    else{
-      home=await api('me');
-      const tabs=TABS[home.user.role];
-      if(!tabs.some(t=>t[0]==tab))tab=tabs[0][0];
-      D=await LOAD[tab]();
+    msg=null;
+    if(scan)await doScan();
+    // 권한을 알아야 어떤 탭을 읽을지 정할 수 있다. 처음이면 먼저 물어본다.
+    let role=home?.user.role;
+    if(!role){
+      frame('<p class="now">불러오는 중입니다...</p>');
+      try{role=localStorage.getItem(ROLE_KEY)}catch(e){}
+      if(!TABS[role]){home=await api('me');role=home.user.role}
     }
-    if(tab=='slip')home.unviewed=D.list.filter(s=>!s.viewed&&s.ym!=slipYm).length;
+    const tabs=TABS[role];
+    if(!tabs.some(t=>t[0]==tab))tab=tabs[0][0];
+    const calls=LOAD[tab](),key=JSON.stringify([tab,calls]),old=seen[key];
+    if(!pre.length&&home){if(old){D=old.D;draw()}else draw(1)}
+    let r;
+    try{r=await apiAll([...pre,['me'],...calls])}
+    catch(e){if(!pre.length||!token)throw e;alert(e.message);return}
+    if(pre.length){then?.();seen={}}
+    if(my!=seq)return; // 그 사이 다른 화면으로 넘어갔다
+    r=r.slice(pre.length);
+    home=r[0];D=make(tab,r.slice(1));
+    try{localStorage.setItem(ROLE_KEY,home.user.role)}catch(e){}
+    if(tab=='slip'){
+      // 명세서를 처음 열 때는 목록을 받아야 어느 달을 열지 알 수 있다
+      if(D.list.length&&!D.list.some(s=>s.ym==slipYm)){slipYm=D.list[0].ym;D.c=await api('my_slip',{ym:slipYm})}
+      home.unviewed=D.list.filter(s=>!s.viewed&&s.ym!=slipYm).length;
+    }
+    const now=JSON.stringify([home,D]);
+    seen[JSON.stringify([tab,LOAD[tab]()])]={D,now};
+    // 기억해 둔 화면과 내용이 같거나, 입력하는 중이면 다시 그리지 않는다
+    const typing=/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
+    if(pre.length||!old||(old.now!=now&&!typing))draw();
+    if(!pre.length&&!old)prefetch();
   }catch(e){
-    if(!token&&e.message=='다시 로그인해 주세요.')return show();
+    if(!token&&e.message=='다시 로그인해 주세요.'){home=null;seen={};return show()}
     return frame(`<div class="card errmsg">${esc(e.message)}</div><button onclick="show()">다시 시도</button>`);
   }
-  draw();
+}
+// 아직 안 본 탭을 미리 한 번에 받아 둔다(탭을 누르면 바로 보이도록). 명세서는 열람 기록이 남으므로 제외.
+async function prefetch(){
+  const todo=TABS[home.user.role].map(t=>t[0]).filter(t=>t!='slip'&&LOAD[t]().length&&!seen[JSON.stringify([t,LOAD[t]()])]);
+  if(!todo.length)return;
+  const lists=todo.map(t=>LOAD[t]());
+  try{
+    const r=await apiAll(lists.flat());
+    let i=0;
+    todo.forEach((t,n)=>{
+      const D=make(t,r.slice(i,i+=lists[n].length)),key=JSON.stringify([t,lists[n]]);
+      if(!seen[key])seen[key]={D,now:''};
+    });
+  }catch(e){}
 }
 function frame(inner,right=''){$('app').innerHTML=`<header><b>농장 근태·급여</b>${right}</header><main>${inner}</main>`}
 
@@ -174,10 +216,10 @@ function drawLogin(){
     <button class="pri big" onclick="login()">${setup?'관리자 계정 만들기':'로그인'}</button>`);
 }
 async function login(){
-  try{const r=await api(setup?'setup':'login',{name:val('ln'),phone:val('lp'),pin:val('lw')});setToken(r.token);tab='';home=null;show()}
+  try{const r=await api(setup?'setup':'login',{name:val('ln'),phone:val('lp'),pin:val('lw')});setToken(r.token);try{localStorage.setItem(ROLE_KEY,r.user.role)}catch(e){}tab='';home=null;seen={};show()}
   catch(e){alert(e.message)}
 }
-async function logout(){try{await api('logout')}catch(e){}setToken(null);acct=0;home=null;show()}
+async function logout(){try{await api('logout')}catch(e){}setToken(null);acct=0;home=null;seen={};show()}
 function vAcct(){
   return `<h2>내 계정</h2><div class="card"><b>${esc(home.user.name)}</b> <span class="mut">${home.user.role=='admin'?'관리자':'직원'}</span></div>
     <h3>비밀번호 변경</h3>
@@ -196,11 +238,11 @@ function readHash(){
 }
 // QR 주소로 들어온 경우: 위치를 확인해 서버에 기록을 요청한다.
 async function doScan(){
-  const [act,farm]=scan;scan=null;tab='clock';
+  const s=scan,[act,farm]=s;scan=null;tab='clock';
   frame('<p class="now">위치 확인 중입니다...</p>');
   const pos=await locate();
   try{msg={ok:1,t:(await api('scan',{act,farm,...pos})).msg}}
-  catch(e){if(!token)throw e;msg={t:e.message}}
+  catch(e){if(!token){scan=s;throw e}msg={t:e.message}}
 }
 function vClock(){
   const ps=home.punches,open=ps.find(p=>!p.out);
@@ -368,11 +410,11 @@ function saveEmp(){
 }
 
 /* ---------- 공통 ---------- */
-function draw(){
+function draw(loading){
   const tabs=TABS[home.user.role];
   const badge={inbox:home.pending,slip:home.unviewed};
-  const view=acct?vAcct():{dash:vDash,inbox:vInbox,att:vAtt,pay:vPay,set:vSet,clock:vClock,req:vReq,my:vMy,slip:vSlip}[tab]();
-  const m=msg;msg=null;
+  const view=acct?vAcct():loading?'<p class="now">불러오는 중입니다...</p>':{dash:vDash,inbox:vInbox,att:vAtt,pay:vPay,set:vSet,clock:vClock,req:vReq,my:vMy,slip:vSlip}[tab]();
+  const m=msg;
   $('app').innerHTML=`<header><b>농장 근태·급여</b><button onclick="acct=!acct;draw()">${acct?'닫기':esc(home.user.name)}</button></header>
     <main>${m?`<div class="card ${m.ok?'okmsg':'errmsg'}">${esc(m.t)}</div>`:''}${view}</main>
     <nav>${tabs.map(t=>`<button class="${!acct&&t[0]==tab?'on':''}" onclick="acct=0;tab='${t[0]}';show()">${t[1]}${badge[t[0]]?`<span class="badge">${badge[t[0]]}</span>`:''}</button>`).join('')}</nav>`;

@@ -41,7 +41,11 @@ export function loadGas() {
     console,
     SpreadsheetApp: { getActiveSpreadsheet: () => ss },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    CacheService: { getScriptCache: () => ({ get: k => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); } }) },
+    CacheService: { getScriptCache: () => ({
+      get: k => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); },
+      getAll: keys => Object.fromEntries(keys.filter(k => cache.has(k)).map(k => [k, cache.get(k)])),
+      remove: k => { cache.delete(k); }, removeAll: keys => keys.forEach(k => cache.delete(k)),
+    }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: text => ({ text, setMimeType() { return this; } }) },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
@@ -55,7 +59,17 @@ export function loadGas() {
   return {
     sheets,
     // 앱과 같은 경로(doPost)로 호출
-    post: body => JSON.parse(ctx.doPost({ postData: { contents: body } }).text),
-    insert: (table, row) => vm.runInContext('_cache={};insert', ctx)(table, row),
+    post: body => {
+      const out = JSON.parse(ctx.doPost({ postData: { contents: body } }).text);
+      // 캐시에 보관된 탭 내용이 시트와 항상 같은지 요청마다 확인한다.
+      for (const [k, v] of cache) {
+        if (!k.startsWith('tbl-')) continue;
+        const fresh = JSON.stringify(vm.runInContext('_cache={};_stored={};_dirty={};rows', ctx)(k.slice(4)));
+        if (fresh !== v) throw new Error(`캐시와 시트가 다릅니다: ${k}`);
+      }
+      return out;
+    },
+    // 시트에 직접 넣는 시험용 지름길. 캐시는 비운다.
+    insert: (table, row) => { cache.clear(); return vm.runInContext('_cache={};_stored={};_dirty={};insert', ctx)(table, row); },
   };
 }

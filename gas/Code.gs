@@ -41,14 +41,27 @@ function doPost(e) {
     const cache = CacheService.getScriptCache(), key = req.rid ? 'rid-' + String(req.rid).slice(0, 64) : '';
     text = key && cache.get(key);
     if (!text) {
+      // 시트를 매번 읽으면 느려서, 탭 내용을 캐시에 보관해 두고 쓴다(바뀐 탭은 요청 끝에 다시 보관).
+      _cache = {}; _dirty = {};
+      _stored = cache.getAll(Object.keys(TABLES).map(n => 'tbl-' + n));
       let out;
-      try { out = { ok: true, data: handle(req.fn, req.p) }; }
-      catch (err) { if (!(err instanceof UserError)) throw err; out = { ok: false, error: err.message }; }
+      try {
+        // calls가 있으면 여러 요청을 순서대로 처리해 결과를 배열로 돌려준다(앱과 서버 사이 왕복을 줄이려고).
+        out = { ok: true, data: req.calls ? req.calls.map(c => handle(c.fn, c.p)) : handle(req.fn, req.p) };
+      } catch (err) { if (!(err instanceof UserError)) throw err; out = { ok: false, error: err.message }; }
+      for (const name in _dirty) {
+        // 시트에서 읽을 때와 같은 모양(모든 값이 글자)으로 보관한다.
+        const keys = Object.keys(TABLES[name][1]);
+        const list = _cache[name].map(o => { const r = { _row: o._row }; keys.forEach(k => r[k] = o[k] == null ? '' : String(o[k])); return r; });
+        try { cache.put('tbl-' + name, JSON.stringify(list), 600); } catch (err) { cache.remove('tbl-' + name); } // 너무 크면 보관하지 않는다
+      }
       text = JSON.stringify(out);
       if (key) try { cache.put(key, text, 300); } catch (err) {} // 너무 큰 응답은 저장되지 않는다(조회라서 다시 처리해도 된다)
     }
   } catch (err) {
     console.error(err);
+    // 처리 도중 예기치 않게 멈췄으면 보관해 둔 탭 내용이 시트와 다를 수 있으므로 버린다.
+    try { CacheService.getScriptCache().removeAll(Object.keys(TABLES).map(n => 'tbl-' + n)); } catch (e2) {}
     text = JSON.stringify({ ok: false, error: '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' });
   } finally {
     try { lock.releaseLock(); } catch (err) {}
@@ -57,7 +70,6 @@ function doPost(e) {
 }
 
 function handle(fn, p) {
-  _cache = {};
   if (!Object.prototype.hasOwnProperty.call(API, fn)) fail('알 수 없는 요청입니다.');
   return API[fn](p || {});
 }
@@ -65,7 +77,8 @@ function handle(fn, p) {
 /* ============ 시트 읽기/쓰기 ============ */
 // 모든 값은 글자로 저장한다(전화번호 앞자리 0, 날짜, 시각이 시트에서 자동 변환되지 않도록).
 
-let _cache = {};
+// _cache: 이번 요청에서 읽은 탭, _dirty: 이번 요청에서 바뀐(또는 시트에서 새로 읽은) 탭, _stored: 캐시에 보관돼 있던 탭
+let _cache = {}, _dirty = {}, _stored = {};
 
 function sheetOf(name) {
   const title = TABLES[name][0];
@@ -88,6 +101,8 @@ function writeRow(sh, row, values) {
 }
 function rows(name) {
   if (_cache[name]) return _cache[name];
+  if (_stored['tbl-' + name]) return _cache[name] = JSON.parse(_stored['tbl-' + name]);
+  _dirty[name] = true;
   const keys = Object.keys(TABLES[name][1]);
   const values = sheetOf(name).getDataRange().getDisplayValues();
   return _cache[name] = values.slice(1).map((v, i) => {
@@ -103,17 +118,22 @@ function insert(name, obj) {
   if (keys[0] === 'id') o.id = String(list.reduce((m, r) => Math.max(m, +r.id), 0) + 1);
   writeRow(sheetOf(name), o._row, keys.map(k => o[k]));
   list.push(o);
+  _dirty[name] = true;
   return o;
 }
 function save(name, o) {
   writeRow(sheetOf(name), o._row, Object.keys(TABLES[name][1]).map(k => o[k]));
+  _dirty[name] = true;
 }
 function remove(name, pred) {
   const hit = rows(name).filter(pred);
   if (!hit.length) return;
   const sh = sheetOf(name);
   hit.map(r => r._row).sort((a, b) => b - a).forEach(r => sh.deleteRow(r));
-  delete _cache[name];
+  // 지운 줄 아래의 줄 번호가 당겨지므로 다시 매긴다.
+  _cache[name] = rows(name).filter(r => !hit.includes(r));
+  _cache[name].forEach((r, i) => r._row = i + 2);
+  _dirty[name] = true;
 }
 
 /* ============ 공통 함수 ============ */

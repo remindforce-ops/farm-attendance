@@ -168,4 +168,9 @@ const again = JSON.stringify({ fn: 'login', rid: crypto.randomUUID(), p: { phone
 assert.equal(gas.post(again).data.token, gas.post(again).data.token);
 assert.notEqual((await call('login', { phone: '01020000003', pin: RESET_PW })).token, gas.post(again).data.token);
 
+/* 여러 요청을 한 번에: 결과는 배열, 하나라도 거부되면 전체가 오류 */
+const many = gas.post(JSON.stringify({ calls: [{ fn: 'status', p: {} }, { fn: 'status', p: {} }] }));
+assert.deepEqual(many, { ok: true, data: [{ setup: false }, { setup: false }] });
+assert.equal(gas.post(JSON.stringify({ calls: [{ fn: 'status', p: {} }, { fn: 'me', p: {} }] })).error, 'AUTH');
+
 console.log('모든 시험 통과');
