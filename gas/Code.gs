@@ -31,7 +31,17 @@ const KINDS = ['ot', 'night', 'hol', 'fix', 'leave'];
 class UserError extends Error {}
 function fail(message) { throw new UserError(message); }
 
+// 진단용: 어느 기능을 쓸 때 응답이 멈추는지 가려내기 위한 호출
+function probe(s) {
+  if (s.includes('L')) { const l = LockService.getScriptLock(); l.waitLock(20000); l.releaseLock(); }
+  if (s.includes('C')) CacheService.getScriptCache().get('x');
+  if (s.includes('S')) SpreadsheetApp.getActiveSpreadsheet().getSheetByName('설정');
+  return ContentService.createTextOutput('pong');
+}
+function doGet(e) { return probe(String(e.parameter.ping || '')); }
+
 function doPost(e) {
+  if (e.postData.contents.startsWith('ping')) return probe(e.postData.contents);
   const lock = LockService.getScriptLock();
   let text;
   try {

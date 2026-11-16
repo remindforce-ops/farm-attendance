@@ -97,23 +97,28 @@ async function apiAll(calls){
   let j;
   document.body.classList.toggle('busy',++busy>0);
   try{
-    // 구글 서버가 처리를 끝내고도 응답이 돌아오지 않고 멈추는 일이 잦다. 3초, 7초가 지나도 답이 없으면
-    // 같은 요청 번호(rid)로 한 번씩 더 보내고, 가장 먼저 온 답을 쓴다.
+    // 구글 Apps Script 웹 앱은 요청을 받고도 응답을 주지 않고 멈추는 일이 4번에 1번꼴로 있다(아무 일도 안 하는 빈 호출,
+    // 다른 네트워크에서도 같음). 그래서 같은 요청 번호(rid)로 처음부터 2개를 보내고, 답이 늦으면 더 보내서 가장 먼저 온 답을 쓴다.
     // 서버는 같은 rid를 한 번만 처리하므로 여러 번 보내도 기록이 두 번 생기지 않는다.
     const body=JSON.stringify({rid:crypto.randomUUID(),calls:calls.map(([fn,args])=>({fn,p:{token,...args}}))});
     const send=()=>new Promise((ok,no)=>{
       const x=new XMLHttpRequest();
       x.open('POST',CFG.url);
       x.setRequestHeader('Content-Type','text/plain;charset=utf-8');
-      x.timeout=12000;
+      x.timeout=15000;
       x.onload=()=>{try{ok(JSON.parse(x.responseText))}catch(e){no(e)}};
       x.onerror=x.ontimeout=no;
       x.send(body);
     });
     j=await new Promise((ok,no)=>{
-      let left=3,done=0;
-      const fire=()=>{if(!done)send().then(v=>{done=1;ok(v)},()=>{if(!--left)no()})};
-      fire();setTimeout(fire,3000);setTimeout(fire,7000);
+      const at=[0,0,2500,5000,8000]; // 보내는 시각(ms). 먼저 답이 오면 나머지는 보내지 않는다
+      let sent=0,failed=0,done=0;
+      const fire=()=>{
+        if(done||sent==at.length)return;
+        sent++;
+        send().then(v=>{done=1;ok(v)},()=>{if(++failed==at.length)no();else if(failed==sent)fire()}); // 보낸 것이 모두 실패했으면 바로 다시
+      };
+      at.forEach(ms=>ms?setTimeout(fire,ms):fire());
     });
   }catch(e){throw new Error('서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.')}
   finally{document.body.classList.toggle('busy',--busy>0)}
