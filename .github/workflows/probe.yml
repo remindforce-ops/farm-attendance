@@ -1,0 +1,13 @@
+# 진단용: 깃허브 서버에서 앱 서버를 반복 호출해 응답 시간을 잰다(수동 실행 전용).
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          U=$(grep -o "https://script[^']*" docs/config.js | tail -1)
+          for i in $(seq 1 40); do
+            curl -sL -o /dev/null --max-time 8 -w "%{http_code}:%{time_total} " -d '{"calls":[{"fn":"status","p":{}}]}' "$U" || true
+          done
