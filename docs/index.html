@@ -91,8 +91,16 @@ let home=null,D=null,tab='',ym=`${now.getFullYear()}-${pad(now.getMonth()+1)}`,r
 async function api(fn,args={}){
   let j;
   try{
-    const res=await fetch(CFG.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({fn,p:{token,...args}})});
-    j=await res.json();
+    // fetch는 일부 크롬에서 이 서버 주소로 보낸 요청이 끝나지 않고 멈춰서 XMLHttpRequest를 쓴다.
+    j=await new Promise((ok,no)=>{
+      const x=new XMLHttpRequest();
+      x.open('POST',CFG.url);
+      x.setRequestHeader('Content-Type','text/plain;charset=utf-8');
+      x.timeout=30000;
+      x.onload=()=>{try{ok(JSON.parse(x.responseText))}catch(e){no(e)}};
+      x.onerror=x.ontimeout=no;
+      x.send(JSON.stringify({fn,p:{token,...args}}));
+    });
   }catch(e){throw new Error('서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.')}
   if(!j.ok){
     if(j.error==='AUTH'){setToken(null);throw new Error('다시 로그인해 주세요.')}
