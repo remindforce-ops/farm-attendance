@@ -36,10 +36,12 @@ class Sheet {
 export function loadGas() {
   const sheets = {};
   const ss = { getSheetByName: n => sheets[n] ?? null, insertSheet: n => sheets[n] = new Sheet() };
+  const cache = new Map();
   const ctx = vm.createContext({
     console,
     SpreadsheetApp: { getActiveSpreadsheet: () => ss },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    CacheService: { getScriptCache: () => ({ get: k => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); } }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: text => ({ text, setMimeType() { return this; } }) },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },

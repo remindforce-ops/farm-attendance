@@ -33,18 +33,27 @@ function fail(message) { throw new UserError(message); }
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  let out;
+  let text;
   try {
     lock.waitLock(20000); // 동시에 들어온 요청은 한 번에 하나씩 처리
     const req = JSON.parse(e.postData.contents);
-    out = { ok: true, data: handle(req.fn, req.p) };
+    // 응답이 중간에 끊기면 앱이 같은 요청 번호(rid)로 다시 보낸다. 두 번 처리하지 않고 처음 결과를 돌려준다.
+    const cache = CacheService.getScriptCache(), key = req.rid ? 'rid-' + String(req.rid).slice(0, 64) : '';
+    text = key && cache.get(key);
+    if (!text) {
+      let out;
+      try { out = { ok: true, data: handle(req.fn, req.p) }; }
+      catch (err) { if (!(err instanceof UserError)) throw err; out = { ok: false, error: err.message }; }
+      text = JSON.stringify(out);
+      if (key) try { cache.put(key, text, 300); } catch (err) {} // 너무 큰 응답은 저장되지 않는다(조회라서 다시 처리해도 된다)
+    }
   } catch (err) {
-    if (!(err instanceof UserError)) console.error(err);
-    out = { ok: false, error: err instanceof UserError ? err.message : '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' };
+    console.error(err);
+    text = JSON.stringify({ ok: false, error: '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' });
   } finally {
     try { lock.releaseLock(); } catch (err) {}
   }
-  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JSON);
 }
 
 function handle(fn, p) {

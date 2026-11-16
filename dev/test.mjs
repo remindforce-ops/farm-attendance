@@ -163,4 +163,9 @@ await fails(call('login', { phone: '01020000002', pin: EMP_PW }), /맞지 않습
 await call('logout', { token: admin });
 await fails(call('me', { token: admin }), /^AUTH$/);
 
+/* 같은 요청 번호(rid)로 다시 보내면 두 번 처리하지 않고 처음 결과를 돌려준다 */
+const again = JSON.stringify({ fn: 'login', rid: crypto.randomUUID(), p: { phone: '01020000003', pin: RESET_PW } });
+assert.equal(gas.post(again).data.token, gas.post(again).data.token);
+assert.notEqual((await call('login', { phone: '01020000003', pin: RESET_PW })).token, gas.post(again).data.token);
+
 console.log('모든 시험 통과');
